@@ -10,6 +10,8 @@ import com.caucho.hessian.io.SerializerFactory;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 
 /**
@@ -23,6 +25,7 @@ public class HessianSerializer implements Serializer {
     private final SerializerFactory serializerFactory;
     private final ClassLoader classLoader;
     private final Function<ByteArrayOutputStream, Hessian2Output> outputFactory;
+    private final ConcurrentMap<String, Class<?>> classCache = new ConcurrentHashMap<>();
 
     public HessianSerializer(ClassLoader classLoader) {
         this.classLoader = classLoader;
@@ -72,27 +75,40 @@ public class HessianSerializer implements Serializer {
             return null;
         }
 
-        ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
-        if (contextClassLoader != null) {
-            try {
-                return Class.forName(className, false, contextClassLoader);
-            } catch (ClassNotFoundException ignored) {
-            }
+        Class<?> cached = classCache.get(className);
+        if (cached != null) {
+            return cached;
         }
+
+        Class<?> resolved = null;
 
         if (classLoader != null) {
             try {
-                return Class.forName(className, false, classLoader);
+                resolved = Class.forName(className, false, classLoader);
             } catch (ClassNotFoundException ignored) {
             }
         }
 
-        try {
-            return Class.forName(className);
-        } catch (ClassNotFoundException ignored) {
+        ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
+        if (contextClassLoader != null) {
+            try {
+                resolved = Class.forName(className, false, contextClassLoader);
+            } catch (ClassNotFoundException ignored) {
+            }
         }
 
-        return null;
+        if (resolved == null) {
+            try {
+                resolved = Class.forName(className);
+            } catch (ClassNotFoundException ignored) {
+            }
+        }
+
+        if (resolved != null) {
+            classCache.putIfAbsent(className, resolved);
+        }
+
+        return resolved;
     }
 
     private boolean useTypeIntern() {
